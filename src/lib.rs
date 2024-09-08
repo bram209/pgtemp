@@ -37,6 +37,7 @@ pub struct PgTempDB {
     // See shutdown implementation for why these are options
     temp_dir: Option<TempDir>,
     postgres_process: Option<Child>,
+    shutdown_gracefully: bool,
 }
 
 impl PgTempDB {
@@ -49,6 +50,7 @@ impl PgTempDB {
         let persist = builder.persist_data_dir;
         let dump_path = builder.dump_path.clone();
         let load_path = builder.load_path.clone();
+        let shutdown_gracefully = builder.shutdown_gracefully.unwrap_or_default();
 
         let temp_dir = run_db::init_db(&mut builder);
         let postgres_process = Some(run_db::run_db(&temp_dir, builder));
@@ -63,6 +65,7 @@ impl PgTempDB {
             dump_path,
             temp_dir,
             postgres_process,
+            shutdown_gracefully,
         };
 
         if let Some(path) = load_path {
@@ -184,15 +187,18 @@ impl PgTempDB {
         let mut postgres_process = self.postgres_process.take().unwrap();
         let temp_dir = self.temp_dir.take().unwrap();
 
-        if self.persist {
-            // graceful shutdown if we're trying to persist.
+        if self.persist || self.shutdown_gracefully {
+            // graceful shutdown
             #[allow(clippy::cast_possible_wrap)]
             let _ret = unsafe { libc::kill(postgres_process.id() as i32, libc::SIGTERM) };
             let _output = postgres_process
                 .wait_with_output()
                 .expect("postgres server failed to exit cleanly");
-            // this prevents it from being deleted on drop
-            let _path = temp_dir.into_path();
+
+            if self.persist {
+                // this prevents it from being deleted on drop
+                let _path = temp_dir.into_path();
+            }
         } else {
             // If there are clients connected the server will not shut down until they are
             // disconnected, so we should just send sigkill and end it immediately.
@@ -305,6 +311,8 @@ pub struct PgTempDBBuilder {
     pub load_path: Option<PathBuf>,
     /// Other server configuration data to be set in `postgresql.conf` via `initdb -c`
     pub server_configs: HashMap<String, String>,
+    /// Whether to shutdown the server gracefully on drop when not persisting. Default: `false`.
+    pub shutdown_gracefully: Option<bool>,
 }
 
 impl PgTempDBBuilder {
@@ -320,6 +328,7 @@ impl PgTempDBBuilder {
             dump_path: None,
             load_path: None,
             server_configs: HashMap::new(),
+            shutdown_gracefully: None,
         }
     }
 
@@ -431,6 +440,13 @@ impl PgTempDBBuilder {
     #[must_use]
     pub fn persist_data(mut self, persist: bool) -> Self {
         self.persist_data_dir = persist;
+        self
+    }
+
+    /// If set, the server will be shutdown gracefully on drop even when not persisting.
+    #[must_use]
+    pub fn with_graceful_shutdown(mut self, shutdown: bool) -> Self {
+        self.shutdown_gracefully = Some(shutdown);
         self
     }
 

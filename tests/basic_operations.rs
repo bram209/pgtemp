@@ -89,8 +89,8 @@ async fn buider_setters() {
     assert_eq!(name, "777");
 }
 
-#[tokio::test]
 /// create a table and insert into it
+#[tokio::test]
 async fn create_table_and_insert() {
     let db = PgTempDB::new();
 
